@@ -1,0 +1,134 @@
+#!/bin/bash
+source $(dirname $0)/kvmrc
+source $(dirname $0)/../../scripts_common.sh
+
+source_file=$1
+dom_shell=$(dirname $0)/get_dom_value.py
+
+# get info from xml deployment file
+domain_name=$(python $dom_shell -n $source_file)
+disk_file_list=($(python $dom_shell -a $source_file "devices" "disk" "source" "file"))
+disk_dev_list=($(python $dom_shell -a $source_file "devices" "disk" "target" "dev"))
+disk_type_list=($(python $dom_shell -a $source_file "devices" "disk" "driver" "type"))
+len=${#disk_file_list[@]}
+let len-=1
+
+#echo ${disk_file_list[@]}
+#echo ${disk_dev_list[@]}
+#echo ${disk_type_list[@]}
+
+qcow2_num=0
+qcow2_list=()
+for i in ${!disk_type_list[@]}
+do
+    if [ ${disk_type_list[$i]} = 'qcow2' ];then
+	let qcow2_num+=1
+	qcow2_list=($qcow2_list ${disk_type_list[$i]})
+    fi
+done
+
+if [ $qcow2_num -gt 1 ];then
+    # only snapshot in all qcow2 format disk is valuable to redefine
+    for i in ${!disk_type_list[@]}
+    do
+	if [ ${disk_type_list[$i]} = "qcow2" ];then
+	    disk_m=${disk_file_list[$i]}
+  	    disk_m_snapshot_list=($(qemu-img snapshot -l $disk_m | sed '1,2d' | awk '{print $2}'))
+	    break
+	fi
+	if [[ "$i" -eq $len ]];then
+	    exit 121
+	fi
+    done
+    valua_snap_list=()
+    valua_snap_time_list=()
+    for snapshot in ${disk_m_snapshot_list[@]}
+    do
+	same_num=1
+	for disk_index in ${!disk_file_list[@]}
+	do
+	    if [[ "${disk_file_list[$disk_index]}" = $disk_m ]] || [[ "${disk_type_list[$disk_index]}" != "qcow2" ]];then
+		#echo ${disk_file_list[$disk_index]}
+		continue
+	    else
+		let same_num+=1
+	    fi
+	    if [ $same_num -eq $qcow2_num ];then
+	       ite_snap_list=($(qemu-img snapshot -l ${disk_file_list[$disk_index]} | sed '1,2d' | awk '{print $2}'))
+	       ite_snap_ymd_list=($(qemu-img snapshot -l ${disk_file_list[$disk_index]} | sed '1,2d' | awk '{print $4}'))
+	       ite_snap_hms_list=($(qemu-img snapshot -l ${disk_file_list[$disk_index]} | sed '1,2d' | awk '{print $5}'))
+	       for i in ${!ite_snap_list[@]}
+	       do
+	    	   if [[ ${ite_snap_list[$i]} = $snapshot ]];then
+	   	       valua_snap_list=("${valua_snap_list[@]}" $snapshot)
+	   	       snap_stamp=`date -d "${ite_snap_ymd_list[$i]} ${ite_snap_hms_list[$i]}" +%s`
+		       valua_snap_time_list=("${valua_snap_time_list[@]}" $snap_stamp)
+	   	   fi
+	       done
+	    fi
+        done   
+    done
+fi
+
+if [ $qcow2_num = 1 ];then
+    valua_snap_list=($(qemu-img snapshot -l ${disk_file_list[0]}| sed '1,2d' | awk '{print $2}'))
+    ite_snap_ymd_list=($(qemu-img snapshot -l ${disk_file_list[0]} | sed '1,2d' | awk '{print $4}'))
+    ite_snap_hms_list=($(qemu-img snapshot -l ${disk_file_list[0]} | sed '1,2d' | awk '{print $5}'))
+    if [ ${#valua_snap_list[@]} -eq 0 ];then
+        exit 121
+    fi 
+    for i in ${!valua_snap_list[@]}
+    do
+        snap_stamp=`date -d "${ite_snap_ymd_list[$i]} ${ite_snap_hms_list[$i]}" +%s`
+        valua_snap_time_list=("${valua_snap_time_list[@]}" $snap_stamp)
+    done
+fi
+
+
+#    echo ${valua_snap_list[@]}
+#    for time in ${valua_snap_time_list[@]}
+#    do
+#        echo $time
+#    done
+if [ ${#valua_snap_list[@]} -eq 0 ];then
+    exit 121
+fi 
+domain_xml=`virsh --connect $LIBVIRT_URI dumpxml $domain_name | sed 's/^/  /g'`
+for index in ${!valua_snap_list[@]}
+
+do
+    dest_sna_xml=$(dirname "$source_file")/snapshot-${valua_snap_list[$index]}.xml
+    disk_snap_info=""
+    for i in ${!disk_dev_list[@]}
+    do
+    if [ ${disk_type_list[$i]} = "qcow2" ];then
+	snapshot='internal'
+    else
+	snapshot='no'
+    fi
+	disk_snap_info="${disk_snap_info}<disk name='${disk_dev_list[$i]}' snapshot='$snapshot'/>"
+    done
+    cat << EOT > $dest_sna_xml
+<domainsnapshot>
+  <name>${valua_snap_list[$index]}</name>
+  <state>running</state>
+  <creationTime>${valua_snap_time_list[$index]}</creationTime>
+  <memory snapshot='internal'/>
+  <disks>
+    $disk_snap_info
+  </disks>
+$domain_xml
+</domainsnapshot>
+EOT
+echo "Recover snapshot file $dest_sna_xml"
+done
+
+
+for i in ${!valua_snap_list[@]}
+do
+    exec_and_log \
+        "virsh --connect $LIBVIRT_URI snapshot-create $domain_name $(dirname "$source_file")/snapshot-${valua_snap_list[$i]}.xml --redefine" \
+        "Could not redefine snapshot for domain $source_file."
+done
+exit 0
+
