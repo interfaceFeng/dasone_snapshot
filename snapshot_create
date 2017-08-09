@@ -26,6 +26,8 @@ data=`virsh --connect $LIBVIRT_URI snapshot-create-as $DOMAIN`
 
 if [ "$?" = "0" ]; then
     echo "$data" | awk '{print $3}'
+    $snapshot_name=`echo "data" | awk '{}'`
+
 else
     error_message "Could not create snapshot $NAME for domain $DOMAIN."
     exit -1
