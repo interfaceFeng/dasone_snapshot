@@ -1,0 +1,23 @@
+#!/bin/bash
+# This bash to refresh other snapshot info when one snapshot is been removed
+
+source $(dirname $0)/kvmrc
+source $(dirname $0)/../../scripts_common.sh
+
+VM_ID="$1"
+DOMAIN="$2"
+snapshot_save_dir="$3"
+
+current_snapshot_list=($(virsh --connect $LIBVIRT_URI snapshot-list $DOMAIN | sed '1,2d' | awk '{printf $1" "}'))
+
+if [ ${#current_snapshot_list[@]} != 0 ];then
+    for snapshot in ${current_snapshot_list[@]}
+    do
+        virsh --connect $LIBVIRT_URI snapshot-dumpxml $DOMAIN $snapshot > "${snapshot_save_dir}/${snapshot}.xml"
+        if [ "$?" != 0 ];then
+            echo "Refresh snapshot $snapshot fail for $DOMAIN"
+        fi
+    done
+else
+    echo "No snapshot left to refresh"
+fi

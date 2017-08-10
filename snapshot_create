@@ -22,11 +22,22 @@ source $(dirname $0)/../../scripts_common.sh
 DOMAIN="$1"
 SNAP_ID="$2"
 
+
 data=`virsh --connect $LIBVIRT_URI snapshot-create-as $DOMAIN`
 
 if [ "$?" = "0" ]; then
     echo "$data" | awk '{print $3}'
-    $snapshot_name=`echo "data" | awk '{}'`
+
+    VM_ID=`echo "$DOMAIN" | sed 's/one-//'`
+    SNAP_SAVE_DIR="/var/lib/one/datastores/0/$VM_ID/snapxml_save"
+    snapshot_name=`echo "$data" | awk '{print $3}'`
+    if [ ! -d "$SNAP_SAVE_DIR" ];then
+        mkdir $SNAP_SAVE_DIR
+        chmod 775 $SNAP_SAVE_DIR
+    fi
+    virsh --connect $LIBVIRT_URI snapshot-dumpxml $DOMAIN $snapshot_name --security-info\
+    > ${SNAP_SAVE_DIR}/${snapshot_name}.xml
+    echo "Save snapshot ${snapshot_name}.xml for domain $DOMAIN"
 
 else
     error_message "Could not create snapshot $NAME for domain $DOMAIN."

@@ -7,70 +7,28 @@ dom_shell=$(dirname $0)/get_dom_value.py
 
 # get info from xml deployment file
 domain_name=$(python $dom_shell -n $source_file)
-disk_file_list=($(python $dom_shell -a $source_file "devices" "disk" "source" "file"))
-disk_dev_list=($(python $dom_shell -a $source_file "devices" "disk" "target" "dev"))
-disk_type_list=($(python $dom_shell -a $source_file "devices" "disk" "driver" "type"))
-
-declare -A snapshot_map_create_time_list
-#declare -A snapshot_map_dev_list
+VM_ID=`echo $domain_name | sed 's/one-//'`
+VM_UUID=`virsh --connect $LIBVIRT_URI domuuid $domain_name`
+snapshot_save_dir="/var/lib/one/datastores/0/$VM_ID/snapxml_save"
 
 
-for disk_index in ${!disk_file_list[@]}
-do
-    if [ ${disk_type_list[$disk_index]} != 'qcow2' ];then
-        continue
-    else
-        disk_snapshot_list=($(qemu-img snapshot -l ${disk_file_list[$disk_index]} | sed '1,2d' | awk '{print $2}'))
-        disk_snap_ymd_list=($(qemu-img snapshot -l ${disk_file_list[$disk_index]} | sed '1,2d' | awk '{print $4}'))
-	    disk_snap_hms_list=($(qemu-img snapshot -l ${disk_file_list[$disk_index]} | sed '1,2d' | awk '{print $5}'))
-        if [ ${#disk_snapshot_list[@]} = 0 ];then
-            continue
-        else
-            for snapshot_index in ${!disk_snapshot_list[@]}
-            do
-                snap_stamp=`date -d "${disk_snap_ymd_list[$snapshot_index]} ${disk_snap_hms_list[$snapshot_index]}" +%s`
-                snapshot_map_create_time_list[${disk_snapshot_list[$snapshot_index]}]=${snap_stamp}
-#                snapshot=${disk_snapshot_list[$snapshot_index]}
-#                disk_dev=${disk_dev_list[$disk_index]}
-#                snapshot_map_dev_list[$snapshot]="${snapshot_map_dev_list[$snapshot]}$disk_dev "
-            done
+if [ -d "$snapshot_save_dir" ] && [ "`ls -A $snapshot_save_dir`" != "" ];then
+    snap_list=($(ls $snapshot_save_dir |sort))
+    for snapxml in ${snap_list[@]}
+    do
+        xml_path=${snapshot_save_dir}/${snapxml}
+        sed -i "s/<uuid>.*<\/uuid>/<uuid>$VM_UUID<\/uuid>/" ${xml_path}
+        exec_and_log \
+            "virsh --connect $LIBVIRT_URI snapshot-create $domain_name ${xml_path} --redefine" \
+            "Could not redefine snapshot ${snapxml} for domain $source_file."
+        if [ "$?" = 0 ];then
+            echo "Snapshot ${snapxml} for domain $domain_name redefine"
         fi
-    fi
-done
 
-if [ ${#snapshot_map_create_time_list[@]} -eq 0 ];then
+    done
+else
+    echo "No snapshot for domain $domain_name"
     exit 121
 fi
-# get domain xml file and insert two space in the front of every line
-domain_xml=`virsh --connect $LIBVIRT_URI dumpxml $domain_name | sed 's/^/  /g'`
-for snapshot_index in ${!snapshot_map_create_time_list[@]}
-do
-    dest_sna_xml=$(dirname "$source_file")/snapshot-${snapshot_index}.xml
-    disk_snap_info=""
-    for dev_index in ${!disk_dev_list[@]}
-    do
-        if [ ${disk_type_list[$dev_index]} = "qcow2" ];then
-            snapshot_stat='internal'
-        else
-            snapshot_stat='no'
-        fi
-        disk_snap_info="${disk_snap_info}<disk name='${disk_dev_list[$dev_index]}' snapshot='$snapshot_stat'/>"
-    done
-    cat << EOT > $dest_sna_xml
-<domainsnapshot>
-  <name>$snapshot_index</name>
-  <state>running</state>
-  <creationTime>${snapshot_map_create_time_list[$snapshot_index]}</creationTime>
-  <memory snapshot='internal'/>
-  <disks>
-    $disk_snap_info
-  </disks>
-$domain_xml
-</domainsnapshot>
-EOT
-echo "Recover snapshot file $dest_sna_xml"
-exec_and_log \
-        "virsh --connect $LIBVIRT_URI snapshot-create $domain_name $dest_sna_xml --redefine" \
-        "Could not redefine snapshot $snapshot_index for domain $source_file."
-done
 
+exit 0

@@ -19,21 +19,23 @@
 source $(dirname $0)/kvmrc
 source $(dirname $0)/../../scripts_common.sh
 
-domain=$1
+DOMAIN="$1"
+NAME="$2"
 
-mkdir -p `dirname $domain`
-cat > $domain
+sys_data_dir="/var/lib/one/datastores/0"
 
-data=`virsh --connect $LIBVIRT_URI create $domain`
+exec_and_log \
+    "virsh --connect $LIBVIRT_URI snapshot-delete $DOMAIN $NAME" \
+    "Could not delete snapshot $NAME for domain $DOMAIN."
 
-
-if [ "x$?" = "x0" ]; then
-    echo $data | sed 's/Domain //' | sed 's/ created from .*$//'
-    $(dirname $0)/snapshot_redefine $domain
-    if [ "$?" = 121 ];then
-	    echo "No snapshot for $domain to redefine"
+if [ "$?" = 0 ];then
+    VM_ID=`echo $DOMAIN | sed 's/one-//'`
+    snapshot_save_dir="${sys_data_dir}/$VM_ID/snapxml_save"
+    rm -rf ${snapshot_save_dir}/${NAME}.xml
+    if [ "$?" = 0 ];then
+        echo "Remove snapshot ${NAME}.xml for domain $DOMAIN"
+        $(dirname $0)/snapshot_refresh ${VM_ID} ${DOMAIN} ${snapshot_save_dir}
     fi
-else
-    error_message "Could not create domain from $domain"
-    exit -1
 fi
+
+exit 0
